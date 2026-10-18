@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.19"
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --all-packages --frozen
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy libs/dwh-common/src connectors/*/src
+
+      - name: Pytest
+        run: uv run pytest
+
+  stand:
+    name: compose config and DAG imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: DAGs import without errors
+        run: |
+          docker run --rm -i -v "$PWD/airflow/dags:/opt/airflow/dags:ro" \
+            -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+            --entrypoint python apache/airflow:3.3.2 - <<'EOF'
+          from airflow.models.dagbag import DagBag
+          bag = DagBag("/opt/airflow/dags")
+          assert not bag.import_errors, bag.import_errors
+          assert bag.dags, "no DAGs found"
+          print("DAGs:", sorted(bag.dags))
+          EOF

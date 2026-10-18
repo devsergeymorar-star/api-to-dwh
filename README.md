@@ -8,7 +8,7 @@ name and the date to load. It does not install connector dependencies or run con
 its own process.
 
 > Work in progress. Done: shared runtime, Open-Meteo connector, local stand
-> (Airflow 3 + ClickHouse + Vault). Next: CI/CD to GHCR, more connectors, dbt staging.
+> (Airflow 3 + ClickHouse + Vault), CI/CD to GHCR. Next: more connectors, dbt staging.
 
 ## Architecture
 
@@ -67,6 +67,21 @@ WHERE _partition_date = '2026-10-17';
 Vault runs in dev mode (in memory). `vault-init` seeds it on every `docker compose up`, see
 `infra/vault/init.sh`. In production use a persistent Vault with AppRole or Kubernetes auth.
 
+## CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | every PR and push to `main` | ruff, mypy (strict), pytest; validates `docker-compose.yaml`; imports all DAGs in a clean Airflow 3.3 container |
+| `connectors.yml` | changes in `connectors/`, `libs/`, lock files | builds an image per **changed** connector (a change in `libs/` rebuilds all), runs a smoke test, and on `main` pushes to GHCR |
+
+Published tags: `ghcr.io/<owner>/connector-<name>:latest`, `:<version>` from the connector's
+`pyproject.toml`, and `:sha-<commit>`. To run the stand on published images instead of local
+builds, set in `.env`:
+
+```bash
+CONNECTOR_IMAGE_TEMPLATE=ghcr.io/<owner>/connector-{name}:latest
+```
+
 ## Layout
 
 ```
@@ -74,6 +89,7 @@ libs/dwh-common/         shared runtime: HTTP retries, ClickHouse raw writer, CL
 connectors/openmeteo/    Open-Meteo daily weather -> raw.openmeteo
 airflow/dags/            DAG factory + connectors.yaml
 infra/vault/init.sh      Vault seeding: KV mount, DWH connection, read-only policy and token
+.github/workflows/       CI and per-connector image builds
 docker-compose.yaml      local stand
 ```
 
