@@ -1,19 +1,80 @@
 # api-to-dwh
 
-Containerized API connectors that land raw data into a ClickHouse DWH, orchestrated by Airflow.
+Containerized API connectors that land raw data into a ClickHouse DWH, orchestrated by Airflow,
+with credentials stored in HashiCorp Vault.
 
 Each source is an independent connector with its own Docker image. Airflow only knows the image
 name and the date to load. It does not install connector dependencies or run connector code in
 its own process.
 
-> Work in progress. Done: shared runtime + Open-Meteo connector.
-> Next: docker-compose (Airflow + ClickHouse), CI/CD to GHCR, more connectors, dbt.
+> Work in progress. Done: shared runtime, Open-Meteo connector, local stand
+> (Airflow 3 + ClickHouse + Vault). Next: CI/CD to GHCR, more connectors, dbt staging.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph stand[docker compose]
+        AF[Airflow 3<br/>scheduler] -- "conn clickhouse_dwh" --> V[(Vault<br/>airflow/ KV)]
+        AF -- "run container<br/>--date D" --> P[docker-socket-proxy]
+        P --> C[connector-openmeteo<br/>container]
+        C -- "raw.openmeteo" --> CH[(ClickHouse)]
+    end
+    API[Open-Meteo API] --> C
+```
+
+- **One image per source.** A connector is a small Python package + Dockerfile. Its dependencies
+  never touch the Airflow environment.
+- **DAGs are generated** from `airflow/dags/connectors.yaml`. A new source is an image plus one line.
+- **Secrets live in Vault.** Airflow uses `VaultBackend` with a read-only token limited to the
+  `airflow/` mount and passes credentials to the container as env vars. They are masked (`***`) in
+  task logs and in the rendered templates view.
+- **No raw Docker socket in Airflow.** Containers are started through `docker-socket-proxy`, which
+  only allows the container and image API.
+
+## Quick start
+
+Requires Docker Desktop (or Docker Engine) and [uv](https://docs.astral.sh/uv/).
+
+```bash
+cp .env.example .env        # then replace every change-me value
+docker build -f connectors/openmeteo/Dockerfile -t connector-openmeteo:dev .
+docker compose up -d
+```
+
+| Service | URL |
+|---|---|
+| Airflow UI (no login, local only) | http://localhost:8080 |
+| ClickHouse HTTP | http://localhost:8123 |
+| Vault UI (root token from `.env`) | http://localhost:8200 |
+
+Unpause `load_openmeteo` in the UI, or trigger a specific day:
+
+```bash
+docker compose exec airflow-scheduler \
+  airflow dags trigger load_openmeteo --conf '{"date": "2026-10-17"}'
+```
+
+Check the result:
+
+```sql
+SELECT _record_key, _loaded_at,
+       JSONExtractFloat(payload, 'daily', 'temperature_2m_max', 1) AS t_max
+FROM raw.openmeteo
+WHERE _partition_date = '2026-10-17';
+```
+
+Vault runs in dev mode (in memory). `vault-init` seeds it on every `docker compose up`, see
+`infra/vault/init.sh`. In production use a persistent Vault with AppRole or Kubernetes auth.
 
 ## Layout
 
 ```
-libs/dwh-common/        shared runtime: HTTP retries, ClickHouse raw writer, CLI runner
-connectors/openmeteo/   Open-Meteo daily weather -> raw.openmeteo
+libs/dwh-common/         shared runtime: HTTP retries, ClickHouse raw writer, CLI runner
+connectors/openmeteo/    Open-Meteo daily weather -> raw.openmeteo
+airflow/dags/            DAG factory + connectors.yaml
+infra/vault/init.sh      Vault seeding: KV mount, DWH connection, read-only policy and token
+docker-compose.yaml      local stand
 ```
 
 ## Raw layer contract
@@ -32,7 +93,7 @@ Every connector writes to `raw.<source>` with the same schema:
 The raw layer is append-only. Re-runs and backfills add new batches. Deduplication
 (latest `_loaded_at` per `_partition_date` + `_record_key`) happens in staging models.
 
-## Local development
+## Connector development
 
 ```bash
 uv sync --all-packages
@@ -44,13 +105,6 @@ uv run mypy libs/dwh-common/src connectors/openmeteo/src
 uv run connector-openmeteo --date 2026-10-17 --dry-run
 ```
 
-## Docker
-
-```bash
-docker build -f connectors/openmeteo/Dockerfile -t connector-openmeteo .
-docker run --rm -e CH_HOST=host.docker.internal connector-openmeteo --date 2026-10-17
-```
-
-ClickHouse connection is configured with `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`,
+A connector reads ClickHouse settings from `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`,
 `CH_DATABASE` (default `raw`). Open-Meteo locations can be overridden with
 `OPENMETEO_LOCATIONS='[{"name": "almaty", "latitude": 43.24, "longitude": 76.89}]'`.

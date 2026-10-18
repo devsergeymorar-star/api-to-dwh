@@ -1,0 +1,162 @@
+# Local stand: Airflow 3 + ClickHouse + Vault + docker-socket-proxy.
+# For development and demos only (Vault in dev mode, Airflow without login).
+#
+#   cp .env.example .env
+#   docker compose up -d
+#   Airflow UI: http://localhost:8080   ClickHouse: http://localhost:8123   Vault: http://localhost:8200
+
+name: api-to-dwh
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.3.2
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    # Connections and Variables are looked up in Vault first, then in the metadata DB.
+    # The token is read-only and limited to the airflow/ mount (see infra/vault/init.sh).
+    AIRFLOW__SECRETS__BACKEND: airflow.providers.hashicorp.secrets.vault.VaultBackend
+    AIRFLOW__SECRETS__BACKEND_KWARGS: >-
+      {"url": "http://vault:8200", "auth_type": "token", "token": "${AIRFLOW_VAULT_TOKEN}",
+       "mount_point": "airflow", "connections_path": "connections",
+       "variables_path": "variables", "config_path": null}
+    # Where connector containers are started and how they reach the DWH.
+    CONNECTOR_DOCKER_URL: tcp://docker-proxy:2375
+    CONNECTOR_NETWORK: dwh-net
+    CONNECTOR_IMAGE_TEMPLATE: ${CONNECTOR_IMAGE_TEMPLATE:-connector-{name}:dev}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    vault-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_USER: ${CH_USER}
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:8123:8123"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "${CH_USER}", "--password", "${CH_PASSWORD}", "-q", "SELECT 1"]
+      interval: 5s
+      retries: 20
+
+  vault:
+    image: hashicorp/vault:1.20
+    command: server -dev -dev-listen-address=0.0.0.0:8200
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_ROOT_TOKEN}
+    cap_add: [IPC_LOCK]
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 3s
+      retries: 20
+
+  # Dev-mode Vault keeps data in memory, so secrets are seeded on every `up`.
+  vault-init:
+    image: hashicorp/vault:1.20
+    entrypoint: ["sh", "/init.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN}
+      AIRFLOW_VAULT_TOKEN: ${AIRFLOW_VAULT_TOKEN}
+      CH_USER: ${CH_USER}
+      CH_PASSWORD: ${CH_PASSWORD}
+    volumes:
+      - ./infra/vault/init.sh:/init.sh:ro
+    depends_on:
+      vault:
+        condition: service_healthy
+
+  # Airflow never gets the raw Docker socket: only the API calls needed to run containers.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.1
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+    user: "0:0"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  airflow-logs:
+
+networks:
+  default:
+    # Fixed name: connector containers started by Airflow join it to reach ClickHouse.
+    name: dwh-net

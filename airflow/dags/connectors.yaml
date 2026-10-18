@@ -1,0 +1,5 @@
+# One entry = one DAG `load_<name>` that runs image connector-<name> once per schedule.
+# Adding a source: build its image, add a line here.
+connectors:
+  - name: openmeteo
+    schedule: "0 3 * * *"
