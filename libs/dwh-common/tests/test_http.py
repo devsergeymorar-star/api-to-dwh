@@ -1,7 +1,7 @@
 import httpx
 import pytest
 import respx
-from dwh_common import request_json
+from dwh_common import request, request_json
 
 URL = "https://api.example.com/data"
 
@@ -43,3 +43,17 @@ def test_retries_network_errors_with_backoff() -> None:
     with httpx.Client() as client:
         assert request_json(client, URL, backoff=2.0, sleep=delays.append) == [1]
     assert delays == [2.0]
+
+
+@respx.mock
+def test_honours_retry_after_on_rate_limit() -> None:
+    respx.get(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "30"}),
+            httpx.Response(200, text="<ok/>"),
+        ]
+    )
+    delays: list[float] = []
+    with httpx.Client() as client:
+        assert request(client, URL, sleep=delays.append).text == "<ok/>"
+    assert delays == [30.0]

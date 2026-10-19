@@ -35,9 +35,14 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
-mypy_path = ["libs/dwh-common/src", "connectors/openmeteo/src"]
+mypy_path = [
+  "libs/dwh-common/src",
+  "connectors/openmeteo/src",
+  "connectors/coingecko/src",
+  "connectors/nbk/src",
+]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["clickhouse_connect.*"]
+module = ["clickhouse_connect.*", "defusedxml.*"]
 ignore_missing_imports = true

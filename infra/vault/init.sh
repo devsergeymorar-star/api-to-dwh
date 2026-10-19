@@ -17,6 +17,12 @@ vault kv put airflow/connections/clickhouse_dwh \
   password="$CH_PASSWORD" \
   schema=raw >/dev/null
 
+# API keys of sources. An empty CoinGecko key means "use the public rate limit".
+vault kv put airflow/connections/coingecko \
+  conn_type=http \
+  host=api.coingecko.com \
+  password="${COINGECKO_API_KEY:-}" >/dev/null
+
 vault policy write airflow-read - <<'EOF' >/dev/null
 path "airflow/data/*"     { capabilities = ["read"] }
 path "airflow/metadata/*" { capabilities = ["read", "list"] }
@@ -26,4 +32,4 @@ if ! vault token lookup "$AIRFLOW_VAULT_TOKEN" >/dev/null 2>&1; then
   vault token create -id="$AIRFLOW_VAULT_TOKEN" -policy=airflow-read -orphan -period=768h >/dev/null
 fi
 
-echo "vault seeded: airflow/connections/clickhouse_dwh, policy airflow-read"
+echo "vault seeded: connections clickhouse_dwh, coingecko; policy airflow-read"

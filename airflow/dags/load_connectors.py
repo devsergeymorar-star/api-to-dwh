@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pendulum
 import yaml
@@ -33,7 +34,7 @@ DWH_ENV = {
 LOAD_DATE = "{{ params.date or macros.ds_add(ds, -1) }}"
 
 
-def build_dag(spec: dict[str, str]) -> DAG:
+def build_dag(spec: dict[str, Any]) -> DAG:
     name = spec["name"]
     image = IMAGE_TEMPLATE.format(name=name)
 
@@ -52,7 +53,7 @@ def build_dag(spec: dict[str, str]) -> DAG:
             task_id="extract_load",
             image=image,
             command=["--date", LOAD_DATE],
-            environment=DWH_ENV,
+            environment={**DWH_ENV, **spec.get("env", {})},
             docker_url=DOCKER_URL,
             network_mode=NETWORK,
             # Local `:dev` images are never in a registry; tagged registry images are pulled.

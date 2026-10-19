@@ -92,6 +92,7 @@ services:
       AIRFLOW_VAULT_TOKEN: ${AIRFLOW_VAULT_TOKEN}
       CH_USER: ${CH_USER}
       CH_PASSWORD: ${CH_PASSWORD}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
     volumes:
       - ./infra/vault/init.sh:/init.sh:ro
     depends_on:
