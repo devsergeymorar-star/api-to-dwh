@@ -1,16 +1,42 @@
 # api-to-dwh
 
-Containerized API connectors that land raw data into a ClickHouse DWH, orchestrated by Airflow,
-with credentials stored in HashiCorp Vault.
+[![CI](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/ci.yml/badge.svg)](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/ci.yml)
+[![Connector images](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/connectors.yml/badge.svg)](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/connectors.yml)
+[![dbt image](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/dbt.yml/badge.svg)](https://github.com/devsergeymorar-star/api-to-dwh/actions/workflows/dbt.yml)
 
-Each source is an independent connector with its own Docker image. Airflow only knows the image
-name and the date to load. It does not install connector dependencies or run connector code in
-its own process.
+**API → ClickHouse data platform in miniature.** Containerized API connectors land raw data in
+ClickHouse, dbt turns it into business tables, Airflow 3 orchestrates everything, and secrets
+live in HashiCorp Vault. The whole stand starts locally with one `docker compose up`.
+
+![Airflow: three connector DAGs publish raw_* Assets, dbt_build runs when any of them updates](docs/img/02-asset-graph.png)
 
 Three sources (weather, crypto prices, official exchange rates) flow through
 `raw` (append-only JSON) → `staging` (deduplicated, typed) → `marts` (business tables).
 For example, `marts.fct_crypto_prices_kzt` joins CoinGecko prices with the National Bank of
 Kazakhstan USD rate to price coins in tenge.
+
+### What this project demonstrates
+
+- **Microservice ETL.** One small Docker image per API source. Airflow only knows the image name
+  and the date; a new source is a package, a Dockerfile and one line of YAML.
+- **Production habits.** Retries with backoff and `Retry-After`, contract validation before
+  loading (pydantic, `defusedxml`), append-only raw layer with dedup downstream, strict typing,
+  tests with mocked HTTP.
+- **Secrets done right.** Vault-backed Airflow Connections, a read-only scoped token, masked in
+  logs and UI; Airflow never gets the raw Docker socket.
+- **Event-driven dbt.** Marts rebuild right after any load via Airflow Assets, with dbt tests
+  and source freshness checks.
+- **CI/CD.** Lint, mypy, pytest, DAG import check; only changed connectors are rebuilt, smoke
+  tested and published to GHCR.
+
+### Screenshots
+
+| | |
+|---|---|
+| ![DAG list](docs/img/01-dags.png) | ![dbt build log](docs/img/03-dbt-log.png) |
+| **Airflow 3**: 3 connector DAGs on cron, `dbt_build` on Assets | **dbt build** inside the runner container: 3 views, 2 tables, 15 tests, all green |
+| ![Crypto prices in KZT](docs/img/04-mart-crypto-kzt.png) | ![Asset graph](docs/img/02-asset-graph.png) |
+| **Mart** `fct_crypto_prices_kzt`: CoinGecko × NBK USD rate | **Lineage**: `load_*` → `raw_*` Assets → `dbt_build` |
 
 ## Connectors
 
