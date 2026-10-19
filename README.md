@@ -7,8 +7,10 @@ Each source is an independent connector with its own Docker image. Airflow only 
 name and the date to load. It does not install connector dependencies or run connector code in
 its own process.
 
-> Work in progress. Done: shared runtime, 3 connectors, local stand
-> (Airflow 3 + ClickHouse + Vault), CI/CD to GHCR. Next: dbt staging and marts.
+Three sources (weather, crypto prices, official exchange rates) flow through
+`raw` (append-only JSON) → `staging` (deduplicated, typed) → `marts` (business tables).
+For example, `marts.fct_crypto_prices_kzt` joins CoinGecko prices with the National Bank of
+Kazakhstan USD rate to price coins in tenge.
 
 ## Connectors
 
@@ -29,6 +31,8 @@ flowchart LR
         P --> C2[connector-coingecko]
         P --> C3[connector-nbk]
         C1 & C2 & C3 -- "raw.&lt;source&gt;" --> CH[(ClickHouse)]
+        C1 & C2 & C3 -. "Asset raw_&lt;source&gt; updated" .-> D[dbt-runner<br/>container]
+        D -- "staging → marts" --> CH
     end
     A1[Open-Meteo API] --> C1
     A2[CoinGecko API] --> C2
@@ -43,6 +47,24 @@ flowchart LR
   task logs and in the rendered templates view.
 - **No raw Docker socket in Airflow.** Containers are started through `docker-socket-proxy`, which
   only allows the container and image API.
+- **dbt is event-driven.** Each load task publishes an Airflow Asset `raw_<source>`; the
+  `dbt_build` DAG is scheduled on those Assets, so marts are rebuilt right after any load instead
+  of at a guessed cron time.
+
+## dbt models
+
+| Layer | Model | Materialization | What it does |
+|---|---|---|---|
+| staging | `stg_openmeteo__daily` | view | latest batch per city/day, daily weather as typed columns |
+| staging | `stg_coingecko__prices` | view | latest batch per coin/day, USD price, market cap, volume |
+| staging | `stg_nbk__rates` | view | latest batch per currency/day, KZT rate per 1 unit (`quant` normalized) |
+| marts | `fct_crypto_prices_kzt` | table | coin prices in USD and KZT at the official NBK rate of the same day |
+| marts | `fct_city_weather` | table | daily weather with a 7-day rolling average temperature |
+
+Deduplication is a single macro (`macros/latest_batch.sql`, `argMax(payload, _loaded_at)`), so
+re-runs and backfills of the raw layer are safe. Tests: `unique`/`not_null` keys, accepted
+values, a singular test that rates are positive, and source freshness (warn after 2 days,
+error after 4).
 
 ## Quick start
 
@@ -53,6 +75,7 @@ cp .env.example .env        # then replace every change-me value
 for c in openmeteo coingecko nbk; do
   docker build -f connectors/$c/Dockerfile -t connector-$c:dev .
 done
+docker build -f dbt/Dockerfile -t dbt-runner:dev .
 docker compose up -d
 ```
 
@@ -62,20 +85,19 @@ docker compose up -d
 | ClickHouse HTTP | http://localhost:8123 |
 | Vault UI (root token from `.env`) | http://localhost:8200 |
 
-Unpause `load_openmeteo` in the UI, or trigger a specific day:
+Unpause the `load_*` DAGs and `dbt_build` in the UI, or trigger a specific day:
 
 ```bash
 docker compose exec airflow-scheduler \
-  airflow dags trigger load_openmeteo --conf '{"date": "2026-10-17"}'
+  airflow dags trigger load_nbk --conf '{"date": "2026-10-17"}'
 ```
 
-Check the result:
+When the load finishes, `dbt_build` starts on its own. Check the result:
 
 ```sql
-SELECT _record_key, _loaded_at,
-       JSONExtractFloat(payload, 'daily', 'temperature_2m_max', 1) AS t_max
-FROM raw.openmeteo
-WHERE _partition_date = '2026-10-17';
+SELECT price_date, symbol, round(price_usd, 2) AS usd, round(price_kzt) AS kzt
+FROM marts.fct_crypto_prices_kzt
+ORDER BY price_date, price_usd DESC;
 ```
 
 Vault runs in dev mode (in memory). `vault-init` seeds it on every `docker compose up`, see
@@ -87,6 +109,7 @@ Vault runs in dev mode (in memory). `vault-init` seeds it on every `docker compo
 |---|---|---|
 | `ci.yml` | every PR and push to `main` | ruff, mypy (strict), pytest; validates `docker-compose.yaml`; imports all DAGs in a clean Airflow 3.3 container |
 | `connectors.yml` | changes in `connectors/`, `libs/`, lock files | builds an image per **changed** connector (a change in `libs/` rebuilds all), runs a smoke test, and on `main` pushes to GHCR |
+| `dbt.yml` | changes in `dbt/` | builds the dbt runner image, runs `dbt parse` inside it, and on `main` pushes `ghcr.io/<owner>/dbt-runner` |
 
 Published tags: `ghcr.io/<owner>/connector-<name>:latest`, `:<version>` from the connector's
 `pyproject.toml`, and `:sha-<commit>`. To run the stand on published images instead of local
@@ -103,7 +126,8 @@ libs/dwh-common/         shared runtime: HTTP retries, ClickHouse raw writer, CL
 connectors/openmeteo/    Open-Meteo daily weather -> raw.openmeteo
 connectors/coingecko/    CoinGecko coin history -> raw.coingecko
 connectors/nbk/          NBK official exchange rates -> raw.nbk
-airflow/dags/            DAG factory + connectors.yaml
+airflow/dags/            connector DAG factory, dbt_build DAG, connectors.yaml
+dbt/                     dbt project (staging, marts, tests) + runner Dockerfile
 infra/vault/init.sh      Vault seeding: KV mount, DWH connection, read-only policy and token
 .github/workflows/       CI and per-connector image builds
 docker-compose.yaml      local stand

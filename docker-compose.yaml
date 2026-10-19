@@ -29,6 +29,7 @@ x-airflow-common: &airflow-common
     CONNECTOR_DOCKER_URL: tcp://docker-proxy:2375
     CONNECTOR_NETWORK: dwh-net
     CONNECTOR_IMAGE_TEMPLATE: ${CONNECTOR_IMAGE_TEMPLATE:-connector-{name}:dev}
+    DBT_IMAGE: ${DBT_IMAGE:-dbt-runner:dev}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - airflow-logs:/opt/airflow/logs

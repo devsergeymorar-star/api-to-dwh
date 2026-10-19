@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: fct_crypto_prices_kzt
+    description: >
+      Daily coin prices in USD and in KZT, converted at the official National Bank of Kazakhstan
+      USD rate for the same day. Joins two independent sources: CoinGecko and NBK.
+    columns:
+      - name: coin_id
+        data_tests: [not_null]
+      - name: price_usd
+        data_tests: [not_null]
+      - name: price_kzt
+        description: NULL when the NBK rate for the day has not been loaded yet.
+
+  - name: fct_city_weather
+    description: Daily weather per city with a 7-day rolling average temperature.
+    columns:
+      - name: city
+        data_tests: [not_null]
+      - name: weather_date
+        data_tests: [not_null]
