@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: stg_openmeteo__daily
+    description: Daily weather per city, latest load per day.
+    columns:
+      - name: weather_id
+        data_tests: [unique, not_null]
+      - name: city
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [almaty, astana, shymkent]
+              config:
+                severity: warn
+
+  - name: stg_coingecko__prices
+    description: Daily coin snapshot in USD, latest load per day.
+    columns:
+      - name: price_id
+        data_tests: [unique, not_null]
+      - name: price_usd
+        data_tests: [not_null]
+
+  - name: stg_nbk__rates
+    description: Official KZT rate per 1 unit of currency, latest load per day.
+    columns:
+      - name: rate_id
+        data_tests: [unique, not_null]
+      - name: currency_code
+        data_tests: [not_null]

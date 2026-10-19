@@ -1,0 +1,21 @@
+name: api_to_dwh
+version: "0.1.0"
+config-version: 2
+profile: api_to_dwh
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+models:
+  api_to_dwh:
+    # ClickHouse "schema" = database. Names are used as-is (see macros/generate_schema_name.sql).
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+      +engine: MergeTree()

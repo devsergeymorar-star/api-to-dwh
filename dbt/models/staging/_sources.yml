@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Append-only landing tables written by the connectors (one batch per run).
+    schema: raw
+    loaded_at_field: _loaded_at
+    freshness:
+      warn_after: { count: 2, period: day }
+      error_after: { count: 4, period: day }
+    tables:
+      - name: openmeteo
+        description: Open-Meteo forecast API response per city and day.
+      - name: coingecko
+        description: CoinGecko /coins/{id}/history response per coin and day.
+      - name: nbk
+        description: One currency item of the National Bank of Kazakhstan rates feed.

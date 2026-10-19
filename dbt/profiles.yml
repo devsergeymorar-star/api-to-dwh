@@ -1,0 +1,15 @@
+# No secrets here: the connection comes from the same CH_* env vars the connectors use.
+# In Airflow they are rendered from the `clickhouse_dwh` connection stored in Vault.
+api_to_dwh:
+  target: default
+  outputs:
+    default:
+      type: clickhouse
+      driver: http
+      host: "{{ env_var('CH_HOST', 'localhost') }}"
+      port: "{{ env_var('CH_PORT', '8123') | int }}"
+      user: "{{ env_var('CH_USER', 'default') }}"
+      password: "{{ env_var('CH_PASSWORD', '') }}"
+      schema: staging
+      secure: false
+      threads: 4

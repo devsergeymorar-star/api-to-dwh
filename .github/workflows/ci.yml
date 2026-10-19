@@ -53,6 +53,7 @@ jobs:
         run: |
           docker run --rm -i -v "$PWD/airflow/dags:/opt/airflow/dags:ro" \
             -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+            -e PYTHONPATH=/opt/airflow/dags \
             --entrypoint python apache/airflow:3.3.2 - <<'EOF'
           from airflow.models.dagbag import DagBag
           bag = DagBag("/opt/airflow/dags")
