@@ -1,5 +1,16 @@
 # One entry = one DAG `load_<name>` that runs image connector-<name> once per schedule.
-# Adding a source: build its image, add a line here.
+# Adding a source: build its image, add an entry here.
+# `env` is passed to the container on top of the DWH settings; values are Jinja templates,
+# so secrets are referenced from Airflow Connections (stored in Vault), never written here.
 connectors:
   - name: openmeteo
     schedule: "0 3 * * *"
+
+  - name: coingecko
+    schedule: "15 0 * * *"
+    env:
+      COINGECKO_API_KEY: "{{ conn.coingecko.password }}"
+
+  # Midday UTC: the previous day's official rate is long final by then.
+  - name: nbk
+    schedule: "0 12 * * *"

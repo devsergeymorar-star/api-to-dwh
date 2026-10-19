@@ -7,20 +7,32 @@ Each source is an independent connector with its own Docker image. Airflow only 
 name and the date to load. It does not install connector dependencies or run connector code in
 its own process.
 
-> Work in progress. Done: shared runtime, Open-Meteo connector, local stand
-> (Airflow 3 + ClickHouse + Vault), CI/CD to GHCR. Next: more connectors, dbt staging.
+> Work in progress. Done: shared runtime, 3 connectors, local stand
+> (Airflow 3 + ClickHouse + Vault), CI/CD to GHCR. Next: dbt staging and marts.
+
+## Connectors
+
+| Connector | Source | Format | Record key | Secret |
+|---|---|---|---|---|
+| `openmeteo` | [Open-Meteo](https://open-meteo.com/) daily + hourly weather for Kazakhstan cities | JSON | city | none |
+| `coingecko` | [CoinGecko](https://www.coingecko.com/en/api) coin history (price, market cap, volume) | JSON | coin id | optional demo key from Vault |
+| `nbk` | [National Bank of Kazakhstan](https://nationalbank.kz/) official KZT exchange rates | XML (parsed with `defusedxml`) | currency code | none |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph stand[docker compose]
-        AF[Airflow 3<br/>scheduler] -- "conn clickhouse_dwh" --> V[(Vault<br/>airflow/ KV)]
+        AF[Airflow 3<br/>scheduler] -- "connections" --> V[(Vault<br/>airflow/ KV)]
         AF -- "run container<br/>--date D" --> P[docker-socket-proxy]
-        P --> C[connector-openmeteo<br/>container]
-        C -- "raw.openmeteo" --> CH[(ClickHouse)]
+        P --> C1[connector-openmeteo]
+        P --> C2[connector-coingecko]
+        P --> C3[connector-nbk]
+        C1 & C2 & C3 -- "raw.&lt;source&gt;" --> CH[(ClickHouse)]
     end
-    API[Open-Meteo API] --> C
+    A1[Open-Meteo API] --> C1
+    A2[CoinGecko API] --> C2
+    A3[NBK rates feed] --> C3
 ```
 
 - **One image per source.** A connector is a small Python package + Dockerfile. Its dependencies
@@ -38,7 +50,9 @@ Requires Docker Desktop (or Docker Engine) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 cp .env.example .env        # then replace every change-me value
-docker build -f connectors/openmeteo/Dockerfile -t connector-openmeteo:dev .
+for c in openmeteo coingecko nbk; do
+  docker build -f connectors/$c/Dockerfile -t connector-$c:dev .
+done
 docker compose up -d
 ```
 
@@ -87,6 +101,8 @@ CONNECTOR_IMAGE_TEMPLATE=ghcr.io/<owner>/connector-{name}:latest
 ```
 libs/dwh-common/         shared runtime: HTTP retries, ClickHouse raw writer, CLI runner
 connectors/openmeteo/    Open-Meteo daily weather -> raw.openmeteo
+connectors/coingecko/    CoinGecko coin history -> raw.coingecko
+connectors/nbk/          NBK official exchange rates -> raw.nbk
 airflow/dags/            DAG factory + connectors.yaml
 infra/vault/init.sh      Vault seeding: KV mount, DWH connection, read-only policy and token
 .github/workflows/       CI and per-connector image builds
@@ -115,7 +131,7 @@ The raw layer is append-only. Re-runs and backfills add new batches. Deduplicati
 uv sync --all-packages
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
-uv run mypy libs/dwh-common/src connectors/openmeteo/src
+uv run mypy libs/dwh-common/src connectors/*/src
 
 # call the real API without touching ClickHouse
 uv run connector-openmeteo --date 2026-10-17 --dry-run
